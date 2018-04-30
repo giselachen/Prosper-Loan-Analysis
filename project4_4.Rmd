@@ -1,0 +1,1422 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+# Prosper Loan Dataset Analysis by Gisela Chen
+========================================================
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# Load all of the packages that you end up using in your analysis in this code
+# chunk.
+
+# Notice that the parameter "echo" was set to FALSE for this code chunk. This
+# prevents the code from displaying in the knitted HTML output. You should set
+# echo=FALSE for all code chunks in your file, unless it makes sense for your
+# report to show the code that generated a particular plot.
+
+# The other parameters for "message" and "warning" should also be set to FALSE
+# for other code chunks once you have verified that each plot comes out as you
+# want it to. This will clean up the flow of your report.
+
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(GGally)
+```
+
+```{r echo=FALSE}
+
+# set up global chunk functions
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+### Goal: explore factors that affect BorrowerAPR.
+
+```{r}
+# Load the Data
+prosper_loan <- read.csv('prosperLoanData.csv')
+```
+
+This data set consists of 113937 loan listings with 81 variables describing 
+each loan. To limit the initial EDA to only 10-15 variables, I will focus on
+analyzing the characteristics of the borrowers and find out what are the factors
+that might affect the APR of the loan.
+
+```{r}
+# Assemble a working dataset of 15 variables plus loan ids and date created
+working_prosper_loan <- prosper_loan[ , c('ListingNumber', 
+                                          'ListingCreationDate', 'Term', 
+                                          'LoanStatus', 'BorrowerAPR', 
+                                          'ListingCategory..numeric.',
+                                          'BorrowerState', 'Occupation',
+                                          'EmploymentStatus',
+                                          'EmploymentStatusDuration', 
+                                          'CreditScoreRangeLower',
+                                          'CreditScoreRangeUpper',
+                                          'DebtToIncomeRatio',
+                                          'StatedMonthlyIncome',
+                                          'LoanOriginalAmount')]
+```
+
+
+# Univariate Plots Section
+
+First, I will look into the dataframe structure.
+
+```{r}
+str(working_prosper_loan)
+```
+
+To better reflect the nature of the data, I will change the data type of some
+columns from int to factor (ListingNumber and Term), convert ListingCreationDate
+from factor to date object, then change the ListingCategory from numeric to 
+factor to make the interpretation more intuitive.
+
+```{r change_data_type}
+# change ListingNumber and Term to factor
+working_prosper_loan$ListingNumber <- factor(working_prosper_loan$ListingNumber)
+working_prosper_loan$Term <- factor(working_prosper_loan$Term)
+
+# convert ListingCreationDate from factor to date object
+working_prosper_loan$ListingCreationDate <- as.Date(as.character(working_prosper_loan$ListingCreationDate), 
+                                                    format = "%Y-%m-%d")
+
+# replace ListingCaterogy..numeric. with actual listing category names and 
+# change the name of the column to ListingCategory
+
+working_prosper_loan$ListingCategory..numeric. <- factor(working_prosper_loan$ListingCategory..numeric.)
+
+levels(working_prosper_loan$ListingCategory..numeric.) <- list(
+  NotAvailable = '0', DebtConsolidation = '1', HomeImprovement = '2', 
+  Business = '3', PersonalLoan = '4', StudentUse = '5', Auto = '6', 
+  Other = '7', BabyAndAdoption = '8', Boat = '9', CosmeticProcedure = '10',
+  EngagementRing = '11', GreenLoans = '12', HouseholdExpenses = '13', 
+  LargePurchases = '14', MedicalOrDental = '15', Motorcycle = '16', RV = '17', 
+  Taxes = '18', Vacation = '19', WeddingLoans = '20')
+
+colnames(working_prosper_loan)[6] <- 'ListingCategory'
+```
+
+Now let's look at the summary of the working dataset!
+
+```{r}
+summary(working_prosper_loan)
+```
+
+It appeared odd to me that there were duplications in the listing number. The 
+listing number should be unique since it represents each individual loan 
+listings so I will take a closer look at some of them.
+
+```{r}
+subset(working_prosper_loan, ListingNumber == '951186')
+```
+
+After checking the top three listings (shown above is the first example), it 
+seems that they are indeed duplications of the same listing so I will keep only 
+the unique loan listings which add up to 113066 observations.
+
+```{r}
+working_prosper_loan <- unique(working_prosper_loan)
+```
+
+Now let's look at individual variables.
+
+```{r}
+ggplot(working_prosper_loan, aes(x = ListingCreationDate, y = ..count..)) +
+  geom_histogram() +
+  scale_x_date(date_breaks = "6 month") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+```
+
+
+```{r}
+summary(working_prosper_loan$ListingCreationDate)
+```
+
+The listings range from November 2005 to March 2014. There is a gap at year 2009
+in which there were no listings at all, splitting the data into two parts. There
+is a sharp increase in the number of listings in 2013.
+
+```{r}
+
+working_prosper_loan %>%                   
+  group_by(Term) %>%                          # group by Term
+  summarize(counts = n()) %>%                 # calculate the counts  
+  arrange(-counts) %>%                        # sort by counts descendently
+  mutate(Term = factor(Term, Term)) %>%       # reset factor level
+  ggplot(aes(x = Term, y = counts)) +         # plot
+  geom_bar(stat = "identity")
+```
+
+```{r}
+summary(working_prosper_loan$Term)
+```
+
+The majority of the loans is of 36-month term (87224) followed by 60-month term 
+(24228) and 12-month term (1614), indicating that the loan dataset is comprised 
+of short term loans.
+
+```{r}
+working_prosper_loan %>% 
+  group_by(LoanStatus) %>% 
+  summarise(counts = n()) %>% 
+  arrange(-counts) %>% 
+  mutate(LoanStatus = factor(LoanStatus, LoanStatus)) %>% 
+  ggplot(aes(x = LoanStatus, y = counts)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# simplify the levels by grouping all problematic loans into one level for 
+# future analysis
+levels(working_prosper_loan$LoanStatus) <- list("Completed" = 
+                                                        c("Completed", 
+                                            "FinalPaymentInProgress"), 
+                                                "Current" = "Current", 
+                                           "Bad_loan" = c("Cancelled", 
+                                                         "Chargedoff",
+                                                          "Defaulted", 
+                                               "Past Due (>120 days)",
+                                               "Past Due (1-15 days)",
+                                              "Past Due (16-30 days)",
+                                              "Past Due (31-60 days)",
+                                              "Past Due (61-90 days)",
+                                             "Past Due (91-120 days)")) 
+```
+
+```{r}
+working_prosper_loan %>% 
+  group_by(LoanStatus) %>% 
+  summarise(counts = n()) %>% 
+  arrange(-counts) %>% 
+  mutate(LoanStatus = factor(LoanStatus, LoanStatus)) %>% 
+  ggplot(aes(x = LoanStatus, y = counts)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+The majority of the loans are either current or completed with remaining loans
+that are mainly charged off, defaulted or past due (Top plot). I decided to 
+create a simplified column with only three levels: "Current", "Completed" and 
+"Bad_loan" (Bottom plot).
+
+```{r}
+working_prosper_loan %>% 
+  group_by(ListingCategory) %>% 
+  summarise(counts = n()) %>% 
+  arrange(-counts) %>% 
+  mutate(ListingCategory = factor(ListingCategory, ListingCategory)) %>% 
+  ggplot(aes(x = ListingCategory, y = counts)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+The most common reason for taking out a loan in the dataset is debt 
+consolidation. There is also a fraction of loans that does not provide a 
+concrete reason (Not available or other). Home improvement and business are also 
+main listing categories in this dataset.
+
+```{r}
+working_prosper_loan %>% 
+  group_by(BorrowerState) %>% 
+  summarise(counts = n()) %>% 
+  arrange(-counts) %>% 
+  mutate(BorrowerState = factor(BorrowerState, BorrowerState)) %>% 
+  ggplot(aes(x = BorrowerState, y = counts)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+```
+
+It looks like California has the most of the loan listings followed by Texas, 
+Florida and New York.
+
+```{r}
+
+working_prosper_loan %>% 
+  group_by(Occupation) %>% 
+  summarize(counts = n()) %>% 
+  arrange(-counts) %>% 
+  mutate(Occupation = factor(Occupation, Occupation)) %>% 
+  ggplot(aes(x = Occupation, y = counts)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5), 
+        axis.text.y = element_text(angle = 60))
+
+```
+
+This is a bit of a busy plot at the x-axis but it nicely demonstrates all 
+flavors of occupation the borrowers had during loan application. Although the 
+highest level is "other" and does not provide too much information, we can see
+that the top three occupations are professionals, computers programmers and
+executives. 
+
+```{r}
+
+working_prosper_loan %>% 
+  group_by(EmploymentStatus) %>% 
+  summarize(counts = n()) %>% 
+  arrange(-counts) %>% 
+  mutate(EmploymentStatus = factor(EmploymentStatus, EmploymentStatus)) %>% 
+  ggplot(aes(x = EmploymentStatus, y = counts)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+I am quite confused with the classification of this category. More than half of 
+the borrowers are employed, although from the choices (levels) of the employment 
+status it is not clear what is the difference between "employed" vs. "full-time"
+or "Part-time' so the proportion might be different depending on the 
+interpretation. Overall most borrowers are employed. 
+
+I suspect that the choices in this category was changed at some point so I 
+decide to look at the time distribution of the EmploymentStatus categories
+(see the chart below).
+
+```{r}
+#ggplot(data = working_prosper_loan, aes(x = ListingCreationDate, y = ..count..)) +
+#  geom_bar() +
+#  scale_x_date(date_breaks = "6 month")
+
+ggplot(working_prosper_loan, aes(x = ListingCreationDate, y = ..count..)) +
+  geom_histogram() +
+  scale_x_date(date_breaks = "6 month") +
+  facet_wrap(~EmploymentStatus) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+
+```
+
+Unfortunately, the result is still confusing to me. For example, "Employed" and
+"Full-time" are two overlapping classifications to me and I was hoping to find
+that the distribution of the counts for these two classifications would be 
+distinct (ie. one is collect at a period that is not overlapped to the other).
+However, it seemed that in the dataset both of them are used to classify loans
+that are collected at the same time and I have no further distinction on how
+the choice was made. 
+
+Next I will look at distribution of the numeric columns starting with APR.
+
+```{r}
+ggplot(data = working_prosper_loan, aes(BorrowerAPR)) +
+  geom_histogram(binwidth = 0.01) +
+  scale_x_continuous(limits = c(0, 0.45), breaks = seq(0, 0.45, 0.05)) +
+  geom_vline(xintercept = median(working_prosper_loan$BorrowerAPR, 
+                                 na.rm = TRUE), color = 'red') + 
+  geom_vline(xintercept = mean(working_prosper_loan$BorrowerAPR, 
+                               na.rm = TRUE), color = 'green')
+
+```
+
+```{r}
+summary(working_prosper_loan$BorrowerAPR)
+```
+
+```{r}
+# check listings without borrowerAPRs
+check <- subset(working_prosper_loan, is.na(BorrowerAPR))
+
+# remove listings without BorrowerAPR from the working dataset
+working_prosper_loan <- subset(working_prosper_loan, !is.na(BorrowerAPR))
+```
+
+The APR histogram appears bimodal and has a broad, normally distributed first 
+peak at 0.2%, near the median(red) and mean(green), and a sharp second peak at 
+0.36%. 
+
+There are 25 listings that are from the very beginning of the dataset that don't
+have APR information. I will remove those listings since my focus is on 
+characterizing the APR. 
+
+```{r}
+# plot the original data
+esd1 <- ggplot(data = working_prosper_loan, 
+               aes(x = EmploymentStatusDuration)) +
+  geom_histogram()
+# plot log transformed data
+esd2 <- ggplot(data = working_prosper_loan, 
+               aes(x = EmploymentStatusDuration + 1)) +
+  geom_histogram() + scale_x_log10()
+# plot square rooted data
+esd3 <- ggplot(data = working_prosper_loan, 
+               aes(x = EmploymentStatusDuration)) +
+  geom_histogram() + scale_x_sqrt()
+
+grid.arrange(esd1, esd2, esd3, ncol = 1)
+```
+
+```{r}
+summary(working_prosper_loan$EmploymentStatusDuration)
+```
+
+Employment status duration for the borrowers range from 0 month to 755 months. 
+The original distribution was positively skewed with a long tail to the right 
+(Top plot). Transformation by taking log10 seems to result in a slightly 
+negatively skewed distribution (Middle plot). Transformation of the data by 
+square rooting seems to reduce the longtailness (Bottom plot).
+
+```{r}
+
+smi1 <- ggplot(data = working_prosper_loan, aes(x = StatedMonthlyIncome)) + 
+  geom_histogram() + 
+  scale_x_continuous(limits = c(0, 30000), breaks = seq(0, 30000, 5000))
+
+smi2 <- ggplot(data = working_prosper_loan, aes(x = StatedMonthlyIncome + 1)) +
+  geom_histogram() + scale_x_log10()
+
+smi3 <- ggplot(data = working_prosper_loan, aes(x = StatedMonthlyIncome)) + 
+  geom_histogram() + scale_x_sqrt()
+
+grid.arrange(smi1, smi2, smi3, ncol = 1)
+```
+
+```{r summary_of_StatedMonthlyIncome}
+summary(working_prosper_loan$StatedMonthlyIncome)
+```
+
+```{r summary_of_log10_StatedMonthlyIncome}
+summary(log10(working_prosper_loan$StatedMonthlyIncome + 1))
+```
+
+```{r summary_of_sqrt_StatedMonthlyIncome}
+summary(sqrt(working_prosper_loan$StatedMonthlyIncome))
+```
+
+StatedMonthlyIncome also shows positive skewness (first summary) but can be 
+tranformed to normal distribution by taking log10 (second summary) or square 
+root (third summary). 
+
+I am puzzled by the large number of maximum StatedMonthlyIncome so decided to 
+take a closer look.
+
+```{r StatedMonthlyIncome_greater_than_500000}
+StatedMonthlyIncome_large <- subset(working_prosper_loan, 
+                                    StatedMonthlyIncome > 500000)
+
+StatedMonthlyIncome_large
+```
+
+It appears that for a StatedMonthlyIncome greater than 500000 there are two
+loan lisitngs for businesses. The StatedMonthlyIncome might be large because it 
+is representing income for the whole business and not individuals. These are 
+likely true outliers.
+
+```{r compare_CreditScoreRangeLower_vs_CreditScoreRangeUpper}
+ggplot(data = working_prosper_loan) + 
+  geom_line(aes(CreditScoreRangeLower), stat = 'count', color = 'blue') +
+  geom_line(aes(CreditScoreRangeUpper), stat = 'count', color = 'red') + 
+  xlab('Credit Score') + 
+  scale_x_continuous( breaks = seq(0, 900, 100))
+```
+
+This plot shows both the upper credit score in red and the lower credit score in
+blue. The trends are very similar so I will only keep the upper range scores.
+
+```{r delete_CreditScoreRangeLower}
+working_prosper_loan <- subset(working_prosper_loan, 
+                               select = -c(CreditScoreRangeLower))
+```
+
+```{r histogram_CreditScoreRangeUpper}
+ggplot(data = working_prosper_loan, aes(CreditScoreRangeUpper)) + geom_histogram()
+```
+
+```{r histogram_CreditScoreRangeUpper_binwidth20}
+ggplot(working_prosper_loan, aes(CreditScoreRangeUpper)) +
+  geom_histogram(binwidth = 20) +
+  scale_x_continuous(limits = c(400, 900), breaks = seq(400, 900, 50))
+```
+
+```{r summary_CreditScoreRangeUpper}
+summary(working_prosper_loan$CreditScoreRangeUpper)
+```
+
+```{r summary_Credit_scoreRangeUpper_greater_than_400}
+with(subset(working_prosper_loan, CreditScoreRangeUpper > 400), 
+     summary(CreditScoreRangeUpper))
+```
+
+There are a few outliers with very low credit scores that negatively skewed the 
+data slightly. After removing those with lower values (less than 400), the 
+variable seemed normally distributed. I would think that the lower credit score 
+is consistent with the fact that many of these loans were targeted for debt 
+consolidation. I would be curious to find out if there is a correlation 
+between low credit score and bad loans though.
+
+```{r histogram_DebtToIncomeRatio}
+ggplot(data = working_prosper_loan, aes(x = DebtToIncomeRatio)) +
+  geom_histogram() +
+  scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.1))
+```
+
+
+```{r histogram_DebtToIncomeRatio_normal_log10_sqrt}
+dtir1 <- ggplot(data = working_prosper_loan, aes(DebtToIncomeRatio)) + 
+  geom_histogram()
+
+dtir2 <- ggplot(data = working_prosper_loan, aes(DebtToIncomeRatio + 1)) +
+  geom_histogram() + scale_x_log10()
+
+dtir3 <- ggplot(data = working_prosper_loan, aes(DebtToIncomeRatio)) + 
+  geom_histogram() + scale_x_sqrt()
+
+grid.arrange(dtir1, dtir2, dtir3, ncol = 1)
+```
+
+```{r summary_DebtToIncomeRatio}
+summary(working_prosper_loan$DebtToIncomeRatio)
+```
+
+```{r summary_DebtToIncomeRatio_log10}
+summary(log10(working_prosper_loan$DebtToIncomeRatio + 1))
+```
+
+```{r summary_DebtToIncomeRatio_sqrt}
+summary(sqrt(working_prosper_loan$DebtToIncomeRatio))
+```
+
+While most of the DTI are at 0.2, we are seeing outliers with big numbers of 
+DTI. They are likely to be real because of the nature of our dataset so I will 
+keep them. Data transformation can be used to normalize the data.
+
+```{r histogram_LoanOriginalAmount_normal_log10_sqrt}
+loa1 <- ggplot(data = working_prosper_loan, aes(LoanOriginalAmount)) + 
+  geom_histogram()
+loa2 <- ggplot(data = working_prosper_loan, aes(LoanOriginalAmount)) + 
+  geom_histogram() + scale_x_log10()
+loa3 <- ggplot(data = working_prosper_loan, aes(LoanOriginalAmount)) + 
+  geom_histogram() + scale_x_sqrt()
+
+grid.arrange(loa1, loa2, loa3, ncol = 1)
+
+```
+
+```{r summary_LoanOriginalAmount_normal}
+summary(working_prosper_loan$LoanOriginalAmount)
+```
+
+```{r summary_LoanOriginalAmount_log10}
+summary(log10(working_prosper_loan$LoanOriginalAmount + 1))
+```
+
+```{r summary_loanOriginalAmount_sqrt}
+summary(sqrt(working_prosper_loan$LoanOriginalAmount))
+```
+
+
+The distribution of loan original amount appear "spiky" with specific peaks 
+presumably representing the amount for a specific type of loan. However, It 
+looks to me that the original data appeared positively skewed and log
+transformation appear to help normalizing the dataset.
+
+# Univariate Analysis
+
+### What is the structure of your dataset?
+#### Size
+The original dataset contains 113937 rows representing loan listings with 81 
+variables describing each listing. I selected 15 variables for the initial EDA. 
+I found that there were duplicated loan listings and deleted the duplications. 
+The final working dataset contains 113066 observations of 14 variables (see last 
+question for reason to delete one variable).
+
+#### Variables
+The variables can be grouped by their data types as follows:
+
+Date: ListingCreationDate \
+Factor: ListingNumber, Term, LoanStatus, ListingCategory, BorrowerState, 
+Occupation, EmploymentStatus \
+Integer: EmploymentStatusDuration, CreditScoreRangeLower, CreditScoreRangeUpper,
+LoanOriginalAmount \
+Number: BorrowerAPR, DebtToIncomeRatio, StatedMonthlyIncome
+
+The distribution of some numeric variables appeared to be skewed but can be 
+transformed to approach normal distribution.
+
+#### Content
+The loans in this dataset are short term loans of 12 months, 36 months or 60
+months durations, ranging from 2005 to 2014. The amount of original loan range 
+from 1,000 to 35,000. The top reason for taking out the loan is debt 
+consolidation. Most of the borrowers are from California. Professionals and 
+programmers came on top of the types of borrowers' occupations.
+
+The APR distribution appear bimodal with a broad first peak that appear normally
+distributed and a second sharp peak at 0.36% (located at the right of the first 
+peak near the end of the distribution).
+
+### What is/are the main feature(s) of interest in your dataset?
+
+The main feature of interst is the APR. I am interested in finding factors that 
+affects the APR.
+
+### What other features in the dataset do you think will help support your \
+investigation into your feature(s) of interest?
+
+I think that high credit score and low debt to income ratio would help bring
+down the APR. Employment stability  and income can also be an important factor.
+
+### Did you create any new variables from existing variables in the dataset?
+
+I converted Listing Category from numeric to factor type by mapping the number
+representing a category to the actual name of the listing category so that it
+would be more intuitive to interpret the outcome.
+
+I also simplified the loan status variable to group all loans in question into 
+"bad loans".
+
+### Of the features you investigated, were there any unusual distributions? \
+Did you perform any operations on the data to tidy, adjust, or change the form \
+of the data? If so, why did you do this?
+
+I initially included two variables, UpperCreditScore and LowerCreditScore, 
+regarding credit scores. After finding that the pattern are almost identical I 
+have decided to include just one, resulting in 14 variables total in the working
+dataset.
+
+I changed the data type for ListingNumber, ListingCreationDate and Term because 
+it fits the nature of the data better. I also changed the levels in 
+ListingCategory and LoanStatus to simplify the analysis.
+
+I found duplicated listings that I have deleted to make sure that all listings
+were unique.
+
+Overall the dataset appear to contain some NA or " " levels in categorical
+variables and some outliers in numerical levels. At this point I have decided to 
+keep them because they appear to be true data points.
+
+# Bivariate Plots Section
+
+Here I will focus on the following questions:
+
+I. Which numeric variable has a correlation with APR? \
+II. How does APR change over time and other variables? \
+III. What are the characteristics of the current, completed and bad loans?
+
+## I. Which numeric variable has a correlation with APR?
+
+To reduce computing time for initial analysis I created a smaller data set with
+only numeric variables and randomly selected ten thousand loan listings to 
+generate correlations plots of those numeric variables against each other using
+'''ggpairs'''. I also generated new numeric columns with modified values (
+'''log10''' or '''sqrt''') to normalized some of the variables.
+
+```{r create_ggpair_dataset}
+
+# Generate a data set with only numeric columns for ggpair analysis
+working_prosper_loan_numeric <- subset(working_prosper_loan, 
+                                       select = c(BorrowerAPR, 
+                                                  EmploymentStatusDuration,
+                                                  CreditScoreRangeUpper, 
+                                                  DebtToIncomeRatio, 
+                                                  StatedMonthlyIncome, 
+                                                  LoanOriginalAmount))
+
+# Create additional columns with transformed variables
+working_prosper_loan_numeric$sqrt_ESD <- sqrt(working_prosper_loan_numeric$EmploymentStatusDuration)
+
+working_prosper_loan_numeric$log10_SMI <- 
+log10(working_prosper_loan_numeric$StatedMonthlyIncome + 1)
+
+working_prosper_loan_numeric$sqrt_DTIR <- 
+sqrt(working_prosper_loan_numeric$DebtToIncomeRatio)
+
+summary(working_prosper_loan_numeric)
+```
+
+```{r ggpair_analysis}
+
+set.seed(38)
+
+# randomly select 10000 samples for initial analysis
+ggpairs(working_prosper_loan_numeric
+        [sample.int(nrow(working_prosper_loan_numeric), 10000), ])
+```
+
+BorrowerAPR have some small but significant negative correlation with 
+CreditScoreRangeUpper (-0.442) and LoanOriginalAmount (-0.325) but not with EmploymentStatusDuration, DebtToIncomeRatio or StatedMonthlyIncome. 
+Additionally, LoanOriginalAmount has small but significant positive correlation 
+with CreditScoreRangeUpper(0.344) and StatedMonthlyIncome(0.38).
+None of the modified variables showed a significant improvement in correlation.
+
+```{r, scatter_BorrowerAPR_CreditScoreRangeUpper}
+ggplot(working_prosper_loan, aes(BorrowerAPR, CreditScoreRangeUpper)) +
+  geom_point(alpha = 1/10, size = 1/10, position = "jitter") +
+  geom_smooth(method = "lm", color = "orange")
+```
+
+```{r, pearson_coef_BorrowerAPR_CreditScoreRangeUpper}
+# compute the pearson's coefficient for the entire data set
+cor.test(working_prosper_loan$BorrowerAPR, 
+         working_prosper_loan$CreditScoreRangeUpper)
+```
+
+Here we can see the negatively trend between high credit score and borrower APR 
+with a pearson's coefficient of -0.429 for the entire dataset.
+
+```{r, scatter_BorrowerAPR_LoanOriginalAmount}
+ggplot(data = working_prosper_loan, aes(BorrowerAPR, LoanOriginalAmount)) +
+  geom_point(alpha = 1/20, size = 1/10, position = "jitter") +
+  geom_smooth(method = "lm", color = "orange")
+```
+
+```{r pearson_coef_BorrowerAPR_LoanOriginalAmount}
+cor.test(working_prosper_loan$BorrowerAPR, 
+         working_prosper_loan$LoanOriginalAmount)
+```
+
+We see that higher loan amounts tend to correlate with lower APR. This is 
+specifically true when the loan amount is large. The discrete horizontal lines 
+are due to the fact that loan amounts are given out at a specific number. The 
+pearson's coefficient for the entire dataset is -0.322.
+
+The two major factors that correlate with APR in this dataset are 
+CreditScoreRangeUpper and LoanOriginalAmount, which makes these two variables
+top candidates for building a model. I would also like to point out that
+StatedMonthlyIncome might also have a very mild effect on BorrwerAPR but the 
+coefficient was very low at -0.165. I was surprised to find that 
+DebtToIncomeRatio was not correlated with BorrowerAPR. I suspect that this
+factor is ignored because many of the loans are used for debt consolidation.
+
+## II. How does APR change over time and other variables?
+
+```{r, scatter_ListingCreationDate_BorrowerAPR}
+ggplot(working_prosper_loan, aes(ListingCreationDate, BorrowerAPR)) + 
+  geom_point(alpha = 1/10, size = 1/10) +
+  scale_x_date(date_breaks = "6 month") + 
+  geom_hline(yintercept = 0.36, color = "magenta", linetype = 2) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+```
+
+Generally a line plot would be the best to visualize trends over time. However,
+because we are looking at individual loan listings, a scatter plot turned out
+to show the APR trend more clearly. We see nicely the upper bound and lower 
+bound of APR over time. For example, during the first few months of data 
+collection, the APR range from 0.03% to slightly over 0.5%. On the other hand, 
+from 2011 to 2014, the lower bound is around 0.06% and the upper bound is around
+0.36%. The extreme high and low rates also appear to be rates prior to 2009. 
+The number of loan listings at a specific time is also highlighted by the
+different shades of grey, with darker dots representing higher number and vice
+versa.
+
+The flactuation of rates at different times poses an inconsistency in which a 
+high APR at one time could be only moderate in another time. The difference in 
+the upper and lower bound of the APR could explain why the correlation between 
+APR and other variables were not stronger. 
+
+```{r, pearson_coef_BorrowerAPR_subsetListingCreationDate}
+# create listings between May 2006 to Nov. 2008
+ListingCreationDateSubset <- subset(working_prosper_loan, ListingCreationDate > 
+                                      "2006-05-01" 
+                                    & ListingCreationDate < "2008-11-1")
+
+cor.test(ListingCreationDateSubset$BorrowerAPR, 
+         ListingCreationDateSubset$CreditScoreRangeUpper)
+```
+
+When I limit the dates to a period of time with similar upper and lower bound
+in APR (May 2006 to Nov. 2008), I see an increase in correlation coefficient
+to -0.625.
+
+Another trend that I observed was that between Mar. 2011 and Jul. 2012, 
+BorrowerAPR were offered at very fixed rates, indicated by the blank spaces
+flanked by dark dotted lines. This trend is very different than other times
+during the data collection.
+
+The magenta dotted line marks the 0.36% APR which represented the second sharp 
+peak observed in the BorrowerAPR histogram in the previous section. There is a
+period from Dec. 2010 to Dec. 2012 where 0.36% was offered extensively that
+could account for that peak. 
+
+Next I will look into how the APR trend is affected by other categorical 
+variables.
+
+```{r box_Term_BorrowerAPR}
+ggplot(working_prosper_loan, aes(x = Term, y = BorrowerAPR)) +
+  geom_boxplot() +
+  stat_summary(fun.y = mean, color = "green", geom = "point")
+```
+
+```{r, summary_Term_BorrowerAPR}
+working_prosper_loan %>% 
+  filter(!is.na(BorrowerAPR)) %>% 
+  group_by(Term) %>% 
+  summarise(mean = mean(BorrowerAPR), median = median(BorrowerAPR), n = n())
+```
+
+Here we see that 12-month term has slightly higher median than the other two 
+terms but 36-month term has the higest mean (green dots). Overall the stats are 
+very similar, suggessting that terms don't affect the APR much.
+
+```{r, scatter_ListingCreationDate_BorrowerAPR_Term}
+ggplot(working_prosper_loan, aes(ListingCreationDate, BorrowerAPR)) +
+  geom_point(alpha = 1/15, size = 1/2) + 
+  facet_wrap(~Term) + 
+  geom_hline(yintercept = 0.36, color = "magenta", linetype = 2)
+```
+
+12-month and 60 month loans were launched only after end of 2011. 12-month loans
+discontinued after 2013. 
+
+```{r box_LoanStatus_BorrowerAPR}
+ggplot(working_prosper_loan, aes(LoanStatus, BorrowerAPR)) +
+  geom_boxplot() +
+  stat_summary(fun.y = mean, color = "green", geom = "point")
+```
+```{r summary_LoanStatus_BorrowerAPR}
+working_prosper_loan %>% 
+  filter(!is.na(BorrowerAPR)) %>% 
+  group_by(LoanStatus) %>% 
+  summarise(mean = mean(BorrowerAPR), median = median(BorrowerAPR), n = n())
+```
+
+Here we see that listings in the Bad_loan category has higher APR than the 
+other two categories. One possible explanation for this difference is that the
+bad loans were issued only during the time when the rate was higher.
+Alternatively, it could also be that loans with higher APR tend to end up being 
+bad loans. So I will look into how these loan types were distributed over time.
+
+```{r, scatter_ListinCreationDate_BorrowerAPR_LoanStatus}
+ggplot(working_prosper_loan, aes(ListingCreationDate, BorrowerAPR)) + 
+  geom_point(alpha = 1/15, size = 1/2) + 
+  facet_wrap(~LoanStatus) + 
+  geom_hline(yintercept = 0.36, color = "magenta", linetype = 2)
+```
+
+Bad loans ranged from the beginning to the end of the data collection time. 
+There were also more loan listings with lower APR in the completed loans than 
+bad loans, suggesting a correlation between high APR and bad loans. 
+
+```{r box_ListingCategory_BorrowerAPR}
+ggplot(subset(working_prosper_loan, !is.na(BorrowerAPR)), 
+       aes(x = reorder(ListingCategory, BorrowerAPR, FUN = median), 
+           y = BorrowerAPR)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  geom_hline(yintercept = with(subset(working_prosper_loan,!is.na(BorrowerAPR)),
+                               median(BorrowerAPR)), 
+             color = "red", linetype = 2)
+```
+
+```{r summary_ListingCategory_BorrowerAPR}
+working_prosper_loan %>% 
+  filter(!is.na(BorrowerAPR)) %>% 
+  group_by(ListingCategory) %>% 
+  summarise(median = median(BorrowerAPR), n = n()) %>% 
+  arrange(median)
+```
+
+BorrowerAPR differed depending on the ListingCategory. Personal loan and Not 
+available are the two categories that has the lowest APR, much less than the 
+overall APR median (red dashed line); whereas Household expenses and Cosmetic 
+procedures are the two categories with the highest APRs, way above the overall 
+median.
+
+```{r scatter_ListingCreationDate_BorrowerAPR_ListingCategory, fig.height=12}
+ggplot(working_prosper_loan, aes(ListingCreationDate, BorrowerAPR)) + 
+  geom_point(alpha = 1/20) + 
+  facet_wrap(~ListingCategory) + 
+  geom_hline(yintercept = 0.36, color = "magenta", linetype = 2)
+```
+
+When we split the time analysis data into listing categories, we see the 
+following:
+1. Loans in personal loan and student use category were once offered but 
+discontinued in the middle of the data collection period.
+2. Loans in debt consolidation, home improvement, business, auto and other
+category were offered consistently throughout the data collection period
+3. There were a series of new loans offered after 2012, among those the more
+popular ones include Medical or dental, wedding loans, household expenses, etc.
+The medians of these different types of loans vary drastically.
+4. Most of the Not available listings were collected before 2008 and all others 
+were collected only after 2008, suggesting that this variable was not collected
+until after 2008. 
+
+Combining the two plots together we can also find out that the rates before 2008 
+have lower top and bottom limits, which might explain why the Not available 
+listing has lower median. Similarly, there were more personal loans with low APR
+given out, resulting in a lower median.
+
+```{r box_BorrowerState_BorrowerAPR}
+ggplot(subset(working_prosper_loan, !is.na(BorrowerAPR)), 
+       aes(x = reorder(BorrowerState, BorrowerAPR, FUN = median), 
+           BorrowerAPR)) + 
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  geom_hline(yintercept = with(subset(working_prosper_loan, 
+                                      !is.na(BorrowerAPR)),
+                                      median(BorrowerAPR)),
+             color = "red", 
+             linetype = 2)
+```
+
+Maine and Iowa have the lowest APRs (with outliers) and Arkansas and Alabama 
+have the highest APRs. At first I thought it was due to the state usury limit,
+but after checking [this article](http://www.lectlaw.com/files/ban02.htm) I 
+didn't find a correlation. For example, the legal rate of interest for ME, AR
+and AL are all 6%. Overall, the BorrowerAPR varies from state to state.
+
+```{r scatter_LCDate_BorrwerAPR_BorrowerState, fig.height= 15, fig.width=12}
+ggplot(working_prosper_loan, aes(ListingCreationDate, BorrowerAPR)) + 
+  geom_point(alpha = 1/5, size = 1) + 
+  facet_wrap(~BorrowerState) + 
+  geom_hline(yintercept = 0.36, color = "magenta", linetype = 2)
+```
+
+When we split the time series data into borrower states we can see the 
+following,
+1. Loans offered to IA, ME and ND were discontinued after 2009. In contrast, 
+loans offered to SD only started after 2009.
+2. Early discontinuation of loans in ND and IA could count for the missing peak
+at 0.36% in the APR histogram in previous section.
+3. There seems to be an increase in issueing many more loans after 2012 in most
+of the states.
+4. The NA listings seem to exist only prior to 2008, similar to 
+Listing Category.
+5. Before 2008, BorrowerAPR seemed drastically different from state to state 
+(eg.CA vs CO). However, after 2008 the high and low limits of BorrowerAPR are 
+very similar. 
+
+When we look at this plot we can also see individual reasons for why the median
+BorrowerAPR is different for each state. For example, the low rates of Maine and
+Iowa are due to the fact that the loans were issued at a time when the rates 
+were low and discontinued when the rates went up. 
+
+```{r box_Occupation_BorrowerAPR}
+ggplot(subset(working_prosper_loan, !is.na(BorrowerAPR)), 
+       aes(x = reorder(Occupation, BorrowerAPR, FUN = median), 
+           y = BorrowerAPR)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  geom_hline(yintercept = with(subset(working_prosper_loan, 
+                                      !is.na(BorrowerAPR)),
+                               median(BorrowerAPR)), 
+             color = "red", linetype = 2)
+```
+
+Judge and Doctor receive the lowest APR. Nurse's Aide and Teacher's Aide
+receive the highest APR. Again we see that BorrowerAPR varies among different
+occupations adn seems to be related to the socialeconomic status of the 
+borrower.
+
+```{r scatter_LCDate_BorrowerAPR_Occupation, fig.height= 15, fig.width=12}
+ggplot(working_prosper_loan, aes(ListingCreationDate, BorrowerAPR)) + 
+  geom_point(alpha = 1/5, size = 1) + 
+  facet_wrap(~Occupation) + 
+  geom_hline(yintercept = 0.36, color = "magenta", linetype = 2)
+```
+
+The data collection for Occupation seems quite completed with most of the levels
+covering from 2006 to 2014. There are two groups of NAs at the beginning 
+(2006 - 2008) and end (2014) of the data collection time. 
+
+```{r box_EmploymentSatus_BorrowerAPR}
+ggplot(data = subset(working_prosper_loan, !is.na(BorrowerAPR)), 
+              aes(x = reorder(EmploymentStatus, BorrowerAPR, FUN = median), 
+                  y = BorrowerAPR)) +
+  geom_boxplot() +
+  geom_hline(yintercept = with(subset(working_prosper_loan, 
+                                      !is.na(BorrowerAPR)),
+                               median(BorrowerAPR)), 
+             color = "red", linetype = 2)
+```
+
+Part-time and Full-time status have lowest APRs whereas Other and Not employed
+have highest APRs.  
+
+```{r}
+ggplot(working_prosper_loan, aes(ListingCreationDate, BorrowerAPR)) + 
+  geom_point(alpha = 1/5, size = 1) + 
+  facet_wrap(~EmploymentStatus) + 
+  geom_hline(yintercept = 0.36, color = "magenta", linetype = 2) + 
+  geom_hline(yintercept = 0.1, color = "pink", linetype = 2)
+```
+
+Here we see again that the definition of levels in this category is confusing. 
+There is almost no data for "Employed" before 2010, which was probably 
+classified as "Full-time" based on the density (shades of gray) of the loan 
+listings. There is also decreased number of loans in "part-time" and "retired" 
+after 2011 and it's not clear if the company decided not to offer loans to 
+these categories or were they included in "others", another category that began
+to accumulate data only after mid-2010.
+
+One thing that I noticed is that listings after 2009, with borrowers that are 
+not employed, consistently had higher APRs on the lower range, set arbitrarily 
+at 0.1% (pink dotted line) when compared to the other levels in this variable.
+Additionally, there seems to be an increase of issueing loans to self-
+employed borrowers after 2011.
+
+In this section we look into how loan listing were offered regionally, over 
+time, and to what type of borrowers. We learn that BorrowerAPR varies from level 
+to level in ListingCategory, BorrowerState, Occupation, LoanStatus and 
+EmploymentStatus but remains similar in Term. Furthermore, we learn that data 
+points in Occupation, Term and LoanStatus are collected consistently throughout 
+the data collection period but not in BorrowerState, ListingCategory and 
+EmploymentStatus, resulting in more missing values in the later variables. 
+
+## III. Characteristics of bad loans
+
+In previous section we see that BorrowerAPR is higher in the Bad_loan level so
+I want to look further into other variables that show a difference to futher
+characterize the bad loan category.
+
+```{r box_LoanStatus_CreditScoreRangeUpper}
+ggplot(working_prosper_loan, aes(x = LoanStatus, y = CreditScoreRangeUpper)) +
+  geom_boxplot() 
+  
+```
+
+```{r summary_LoanStatus_CreditScoreRangeUpper}
+working_prosper_loan %>% 
+  filter(!is.na(CreditScoreRangeUpper)) %>% 
+  group_by(LoanStatus) %>% 
+  summarise(median = median(CreditScoreRangeUpper), mean = mean(CreditScoreRangeUpper, n = n()))
+```
+
+Both mean and median is lower for Bad_loans than for Completed and Current 
+loans.
+
+```{r scatter_ListingCreationDate_CreditScoreRangeUpper_LoanStatus}
+ggplot(working_prosper_loan, aes(ListingCreationDate, CreditScoreRangeUpper)) +
+  geom_point(size = 0.05, position = "jitter", alpha = 1/10) +
+  facet_wrap(~LoanStatus)
+```
+
+Here we can see that the low credit scores are from between 2006 to 2007.
+
+```{r box_LoanStatus_SubsetCreditScoreRangeUpper}
+ggplot(working_prosper_loan, aes(LoanStatus, CreditScoreRangeUpper)) +
+  geom_boxplot() +
+  coord_cartesian(ylim = c(500, 800))
+```
+
+A zoom-in of CreditScoreRange shows that Current loans has the highest median of 
+credit scores followed by Completed then Bad_loan.
+
+```{r box_LoanStatus_DebtToIncomeRatio}
+ggplot(working_prosper_loan, aes(LoanStatus, DebtToIncomeRatio)) +
+  geom_boxplot()
+```
+
+We know from previous session that the distribution is very positively skewed.
+It's hard to see the bulk of the data because of the outliers so I will zoom-in
+first.
+
+```{r box_LoanStatus_SubsetDebtToIncomeRatio}
+ggplot(working_prosper_loan, aes(LoanStatus, DebtToIncomeRatio)) +
+  geom_boxplot() +
+  coord_cartesian(ylim = c(0, 0.5)) +
+  stat_summary(fun.y = mean, color = "green", geom = "point")
+```
+
+```{r summary_LoanStatus_DebtToIncomeRatio}
+working_prosper_loan %>% 
+  filter(!is.na(DebtToIncomeRatio)) %>% 
+  group_by(LoanStatus) %>% 
+  summarise(median = median(DebtToIncomeRatio), mean = mean(DebtToIncomeRatio), n = n())
+```
+
+Current and Bad_loan have similar medians but Bad_loan has a much higher mean,
+suggesting that it might have more data points with higher DTI ratio. To test
+that, I decide to look at the summary of data points with DTI ratio greater
+than one.
+
+```{r summary_LoanStatus_SubsetDebtToIncomeRatio}
+working_prosper_loan %>% 
+  filter(DebtToIncomeRatio > 1) %>% 
+  group_by(LoanStatus) %>% 
+  summarise(median = median(DebtToIncomeRatio), mean = mean(DebtToIncomeRatio), n = n())
+```
+
+When I look at median and mean of DTI ratios greater than one, I see that 
+Bad_loan has higher median and mean than the other two categories. 
+
+```{r box_loanStatus_StatedMonthlyIncome}
+ggplot(working_prosper_loan, aes(LoanStatus, StatedMonthlyIncome)) +
+  geom_boxplot()
+```
+
+```{r box_LoanStatus_StatedMonthlyIncome}
+ggplot(working_prosper_loan, aes(LoanStatus, StatedMonthlyIncome)) +
+  geom_boxplot() +
+  coord_cartesian(ylim = c(0, 10000)) +
+  stat_summary(fun.y = mean, geom = "point", color = "green")
+```
+
+```{r summary_LoanStatus_StatedMonthlyIncome}
+working_prosper_loan %>% 
+  filter(!is.na(StatedMonthlyIncome)) %>% 
+  group_by(LoanStatus) %>% 
+  summarise(median = median(StatedMonthlyIncome), 
+            mean = mean(StatedMonthlyIncome), n = n())
+```
+
+Bad_loan has the smallest median and mean for StatedMonthlyIncome, suggesting 
+that borrowers in this group tend to have less monthly income.
+
+```{r box_LoanStatus_LoanOriginalAmount}
+ggplot(working_prosper_loan, aes(LoanStatus, LoanOriginalAmount)) +
+  geom_boxplot()
+```
+
+```{r summary_LoanStatus_OriginalMonthlyIncome}
+working_prosper_loan %>% 
+  filter(!is.na(LoanOriginalAmount)) %>% 
+  group_by(LoanStatus) %>% 
+  summarise(median = median(LoanOriginalAmount), 
+            mean = mean(LoanOriginalAmount), n = n())
+```
+
+Current loans have the highest median and mean followed by Completed and 
+Bad_loans. This could be because both Completed and Bad_loans have more data
+points from earlier times when the loan amount was less. To check it I will
+only look at data points that are after 2009-08-01.
+
+```{r box_LoanStatus_SubsetLoanOriginalAmount}
+ggplot(data = subset(working_prosper_loan, ListingCreationDate > "2011-01-01"),
+       aes(LoanStatus, LoanOriginalAmount)) +
+  geom_boxplot()
+```
+
+```{r summary_LoanStatus_SubsetOriginalMonthlyIncome}
+working_prosper_loan %>% 
+  filter(!is.na(LoanOriginalAmount) & ListingCreationDate > "2011-01-01") %>% 
+  group_by(LoanStatus) %>% 
+  summarise(median = median(LoanOriginalAmount), 
+            mean = mean(LoanOriginalAmount), n = n())
+```
+
+It doesn't appear to be the case as advancing the listing creating date only
+increase a little of the median and the mean of Completed and Bad_loans but they
+didn't catch up with Current loans.
+
+# Bivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the \
+investigation. How did the feature(s) of interest vary with other features in \
+the dataset?
+
+1. BorrowerAPR vs. numerical variables:
+
+APR is negatively correlated with CreditScoreRangeUpper (-0.442) and with 
+LoanOriginalAmount (-0.325).
+
+2. BorrowerAPR vs. time and categorical variables:
+
+APR is affected by ListingCreationTime,, BorrowerState, Occupation and
+EmploymentStatus but not Term.
+
+### Did you observe any interesting relationships between the other features \
+(not the main feature(s) of interest)?
+
+1. Additional numerical correlations:
+
+LoanOriginalAmount has low but significant correlation with 
+CreditScoreRangeUpper (0.344) and StatedMonthlyIncome(0.38)
+
+2. Characteristics of Bad_loan listings:
+
+The Bad_loan in LoanStatus has lower mean/median in CreditScoreRangeUpper,
+StatedMonthlyIncome and LoanOriginalAmount but higher mean/median 
+in BorrowerAPR and DebtToIncomeRatio for listings with DTI ratio greater than 
+one. 
+
+3. Time analysis summary:
+
+By looking at the variables over time I found that the maximum/minimum of APR
+change over time and could be an influencer of APR correlation with other 
+variables (eg. by restricting to listings offered at a smaller time window
+with similar APR max/min I can improve the correlation coefficient). In
+addition, I found changes in data collection and loan offering strategies that
+would help in refining the analysis strategy down the road.
+
+### What was the strongest relationship you found?
+Despite the fact that this dataset contained many loans with bad
+credit scores, I found that BorrowerAPR negatively correlated with 
+CreditScoreRangeUpper the most. This correlation can be further strengthened by
+looking at specific time windows during which the max/min APRs are similar.
+
+# Multivariate Plots Section
+
+I would imagine that for a loan company, what they want to see least is the 
+occurrence of bad loans. Therefore in this section, I would like to focus on
+looking at what are the characteristics of bad loans from a few different 
+angles. 
+
+## I. How is LoanStatus distributed on the APR vs. CreditScoreUpper scatterplot?
+
+From previous section we saw that BorrowerAPR and CreditScoreUpper had the best
+negative correlation so I would like to find out how the distribution of 
+LoanStatus is within this correlation. 
+
+```{r scatter_BorrowerAPR_CreditScoreRangeUpper_LoanStatus}
+theme_set(theme_gray(base_size = 10))
+ggplot(working_prosper_loan, aes(BorrowerAPR, CreditScoreRangeUpper)) +
+  geom_point(aes(color = LoanStatus), size = 1/2, position = "jitter") +
+  ylim(300, 1000)
+```
+
+
+At this resolution, we see that both the Completed and Bad_loan classes have a 
+more diverse distribution with no particular pattern. The Current class is more 
+centered on the upper half of the distribution, indicating that current loans 
+have a higher requirement of CreditScoreRange.
+
+## II. What is the trend of average BorrowerAPR of Bad_loans over time?  
+
+We saw that BorrowerAPR is higher in the Bad_loan category. Did this happen
+throughout the data collection time or was it because of some specific period
+that had a very high rate? To find out, I will look at the trend of BorrowerAPRs
+of different LoanStatus over time.
+
+```{r scatter_ListingCreationDate_BorrowerAPR_line_LoanStatus}
+ggplot(working_prosper_loan, aes(ListingCreationDate, BorrowerAPR)) + 
+  geom_point(alpha = 1/10, size = 1/10) +
+  scale_x_date(date_breaks = "year") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_smooth(aes(color = LoanStatus))
+```
+
+Despite a similar trend to the Completed listings, the Bad_loan listings had an 
+overall higher BorrowerAPR all the time.
+
+Is this true when we split the data into different categorical variables?
+
+```{r scatter_LCDate_BorrowerAPR_line_LStatus_ListingCategory, fig.height= 20}
+ggplot(working_prosper_loan, aes(ListingCreationDate, BorrowerAPR)) + 
+  geom_point(alpha = 1/10, size = 1/10) +
+  scale_x_date(date_breaks = "year") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_smooth(aes(color = LoanStatus), size = 0.5) +
+  facet_wrap(~ListingCategory)
+```
+
+After splitting the data into subgroups, some levels with few data points such
+as boat or RV did not produce the curves or had curves with high deviation (
+overfitting). When we focus on levels with sufficient data points we see that 
+all of them had Bad_loan listing with higher BorrowerAPR just like we saw 
+earlier.
+
+```{r scatter_LCDate_BorrowerAPR_line_LStatus_BorrowerState, fig.height= 25}
+ggplot(working_prosper_loan, aes(ListingCreationDate, BorrowerAPR)) + 
+  scale_x_date(date_breaks = "year") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_smooth(aes(color = LoanStatus), size = 0.5) +
+  facet_wrap(~BorrowerState)
+```
+
+There seemed to be more variation of LoanStatus pattern but overall the 
+Bad_loan listings have higher BorrowerAPRs with the exception of AK.
+
+```{r scatter_LCDate_BorrowerAPR_line_LStatus_Occupation, fig.height= 25}
+ggplot(working_prosper_loan, aes(ListingCreationDate, BorrowerAPR)) + 
+  scale_x_date(date_breaks = "year") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_smooth(aes(color = LoanStatus), size = 0.5) +
+  facet_wrap(~Occupation)
+```
+
+Even though the difference is not as obvious after splitting, most levels in 
+Occupation have higher BorrowerAPR in Bad_loan listings with the exception of 
+flight Attendant.
+
+Overall the higher BorrowerAPR of Bad_loans persisted over time across most of
+the categorical variables.
+
+## III. What is the percent of bad_loans in different listing categories \
+across different states?
+
+I am curious to see if there are spicific traits for Bad_loan listings. For
+example, is there a certain listing category type in a specific state that
+has a higher chance to become a Bad_loan? or, is there an occupation within a
+listing category with higher percentage of Bad_loan?
+
+```{r compute_BadLoanRatio}
+BadLoanRatio <- working_prosper_loan %>% 
+  group_by(ListingCategory, BorrowerState, LoanStatus) %>% 
+  summarise(count = n()) %>% 
+  mutate(ratio = count / sum(count)) %>% 
+  filter(LoanStatus == "Bad_loan") %>% 
+  arrange(-count, -ratio)
+
+BadLoanRatio
+```
+
+```{r tile_BadLoanRatio, fig.width= 10, fig.height= 10}
+ggplot(data = BadLoanRatio, aes(x = ListingCategory, y = BorrowerState, fill = ratio)) +
+  geom_tile() + geom_text(aes(label = count), size = 3, color = "white") + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+I first grouped the data by ListingCategory then by BorrowerState. I calculated 
+the ratio of each levels in LoanStatus. I then selected a table with
+only Bad_loan listings and use the tile plot to visualize the ratio of Bad_loans
+in color with the corresponding number of Bad_loan listings in white. 
+
+As shown in this plot, each tile represent a ListingCategory type (x-axis) in a 
+specific state (y-axis). Empty tiles indicate that there is no such subcategory 
+or that there is no Bad_loan listings in that subcategory. 
+
+A few trends can be observed from the plot:
+
+1. All light blue tiles (those with higher percentage of bad loan) has 
+relatively small sample size, suggesting that these are events that most likely 
+happened by chance and not due to the possibility that a specific category in
+a state is more prone to result in bad loans. However, the State of SD seemed 
+to have a higher number of light blue tiles that I would recommend to pay a 
+closer attention.
+
+2. The left side of the figure has less numbers of listings than the right side 
+of the figure presumably due to the fact that these categories were introduced 
+later in the dataset.
+
+3. DebtConsolidation has mostly dark blue tiles, indicating that the company
+is doing a good job in managing their main sector of business.
+
+4. PersonalLoan and StudentUse has more lighter blue tiles than other categories
+which might explain why these two categories were discontinued.
+
+Taken together, this will be a good figure to use for following up on the 
+performance of the loans in a more detailed manner.
+
+# Multivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the \
+investigation. Were there features that strengthened each other in terms of \
+looking at your feature(s) of interest?
+
+I focused on investigating the relationship between BorrowerAPR and loan
+categories (Current, Completed and Bad_loans).  I found that Current loans
+have a higher correlation between BorrowerAPR and CreditScoreUpper. 
+Additionally, I also found that the Bad_loans consistently associated with a 
+higher BorrowerAPR over time.
+
+### Were there any interesting or surprising interactions between features?
+
+After breaking down the number of BadLoans (both the ratio and the absolute
+number) over BorrowerStates and ListingCategory, I could see trends of how the 
+company was managing their loan listings. For example, on one hand, loan 
+categories that had higher ratio of bad loans were discontinued; on the other
+hand, the company maintained a low ratio of bad loans for the main 
+ListingCategory of their business. 
+
+### OPTIONAL: Did you create any models with your dataset? Discuss the \
+strengths and limitations of your model.
+
+I did not create a model because the linear relationship between BorrowerAPR and
+other features is not very strong. Given that there are many features in the 
+dataset, I would probably try some feature reduction methods such as Principle
+Coponent Analysis to further narrow down features that might affect the 
+BorrowerAPR for model construction (See reflection).
+
+------
+
+# Final Plots and Summary
+
+### Plot One
+```{r Plot_One}
+ggplot(working_prosper_loan, aes(BorrowerAPR, CreditScoreRangeUpper)) +
+  geom_point(alpha = 1/10, size = 1/10, position = "jitter") +
+  geom_smooth(method = "lm", color = "orange") +
+  labs(title = "CreditScore vs APR", x = "APR (%)", y = "Credit Score")
+```
+
+### Description One
+There is a moderate negative trend between the borrower's credit score and the
+APR of the loan. Note that in the bottom of this plot there are some cases of 
+loans whose borrowers' credit scores are very poor. This could be due to the 
+nature of the dataset because a moajority of the loans are given out for 
+debt consolidation.
+
+### Plot Two
+```{r Plot_Two}
+ggplot(working_prosper_loan, aes(ListingCreationDate, BorrowerAPR)) + 
+  geom_point(alpha = 1/10, size = 1/10) +
+  scale_x_date(date_breaks = "year") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_smooth(aes(color = LoanStatus)) +
+  labs(title = "APR fluctuation of different loan status over time",
+       x = "", y = "APR (%)")
+```
+
+### Description Two
+In this time-series analysis that tracks borrowers' APR distribution, we see 
+that loans that have bad standing have hiher APR than completed or current 
+loans listings.
+
+### Plot Three
+```{r Plot_Three, fig.width= 10, fig.height= 10}
+ggplot(data = BadLoanRatio, aes(x = ListingCategory, y = BorrowerState, fill = ratio)) +
+  geom_tile() + geom_text(aes(label = count), size = 3, color = "white") + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Ratios of bad loans in different listing categories and states ")
+```
+
+### Description Three
+A tile plot of bad loan ratio shown in different shades of blue in different 
+listing category across different states. The numbers represent the actual 
+number of bad loan listings in each category at each state. We see that for the 
+major category of this dataset, debt consolidation, although the actual numbers 
+of bad loans are higher, the ratio is relatively low in the total amount of loan 
+listings in that category. 
+
+------
+
+# Reflection
+
+I chose this data set to familiarize myself with analyzing real world data. The
+reflections along each step of the EDA are summarized below.
+
+## 1. Data wrangling: 
+
+As a personal taste this is my favorite part of the process. I enjoyed finding
+discrepancies in the dataset and trouble-shoot to see what caused it and how to 
+fix it. 
+
+This is a pretty organized data set in the sense that a csv file with 
+variables were already available. Neverthless, a few treatments were needed 
+before the data set was ready for analysis. There were duplicates in the dataset 
+that needed to be taken care of. The classes of some categorical variables were 
+assigned at different time of data collection and the incoherence inteferes with 
+interpretation of data analysis. 
+
+The data set included data points collected over a long period of time during
+which many of the numerical variables (eg. APRs, Credit Scores) might have 
+fluctuated significantly. This might cause difference in interpretation. For 
+example, what was considered a low APR rate at one time might be might high in 
+another time. For a more consistent analysis further down the road, I would 
+consider using some max./min. reduction to create new variables with normalized 
+numbers.
+
+## 2. Data analysis:
+
+In this section I tried different plots and plotting strategies (eg., sorting by 
+quantity) to better data visualization and analysis. Because this is my first 
+time to use R, I spent a lot of time googling about how to code to get the 
+result I wanted and I was pretty happy with what I could achieve. One important 
+aspect of data analysis that I left out was statistical analyses to see if the 
+differences that I was seeing was statistically significant. However, given that 
+most EDA that I saw didn't include statistical analysis and that the report was 
+becoming too long. I have decided to leave it out. Many of the comparisons can 
+be done with student T tests or 3-way ANOVA tests. 
+
+A surprising finding that I had while analyzing this particular dataset was that
+borrowers with no income or low credit score was able to get a loan. After
+researching more into the topic, some factors that might have contributed to it
+include collaterals or prior relationship between the client and the company. 
+In the original dataset, there were features named "Investors", 
+"InvestmentsFromFriends", "recommendations" and "IsBorrowerHomeowner" that can
+be investigated further to see if they also affect the BorrowerAPR.
+
+## 3. Model building:
+
+Given that this is a data set with many variables, there are different questions
+that one can ask for model building. For example, we can try to build a linear 
+regression model that can predict what would be a good APR rates for 
+an applicant if we can find a numerical variable that strongly correlate with 
+the APR. However, I would proceed with caution because the disbribution of 
+BorrowerAPR has to be normal to build the model, which is not the case for this
+dataset. 
+
+Alternatively, we can build a logistic regression model that can predict if a 
+loan applicant is likely to successfully pay off the loan given the features 
+provided. Many of the features indeed showed a difference in the Bad_loans 
+subgroup. Further statistical analysis (t tests) can be conducted to see which 
+difference is significant to proceed to the next step. 
+Lastly, dimentionality reduction techniques can be used to further narrow down
+dimentions (features) that are important in defining the dataset for model 
+building.
